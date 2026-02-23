@@ -574,9 +574,22 @@ def build_stub_code(language_key: str | None) -> str:
 def build_universal_prompt(task: str) -> str:
     return (
         "Ответь подробно и по делу, без кода и без псевдокода.\n"
-        "Структурируй ответ: краткий вывод, далее пошаговые рекомендации.\n\n"
+        "Структура ответа (строго в таком виде, без markdown):\n"
+        "Краткий вывод: ...\n"
+        "Шаги:\n"
+        "1) ...\n"
+        "2) ...\n\n"
         f"Запрос: {task}"
     )
+
+
+def format_universal_response(text: str) -> str:
+    clean = (text or "").strip()
+    if not clean:
+        clean = "Краткий вывод: ответ пуст.\nШаги:\n1) Повтори запрос."
+    header = "🧠 Универсал"
+    separator = "-" * 28
+    return f"{header}\n{separator}\n{clean}"
 
 
 async def generate_code_for_task(update: Update, context: ContextTypes.DEFAULT_TYPE, task_text: str) -> None:
@@ -637,7 +650,9 @@ async def generate_code_for_task(update: Update, context: ContextTypes.DEFAULT_T
             reply_markup=mini_app_keyboard,
         )
     else:
-        await safe_reply_code(update.message, answer, lang=lang_key)
+        await update.message.reply_text(
+            "Мини-приложение не настроено. Укажи MINI_APP_URL, чтобы открыть код."
+        )
 
 
 async def generate_universal_answer(update: Update, context: ContextTypes.DEFAULT_TYPE, task_text: str) -> None:
@@ -676,7 +691,7 @@ async def generate_universal_answer(update: Update, context: ContextTypes.DEFAUL
             max_tokens=1600,
         )
 
-    await safe_reply_text(update.message, answer)
+    await safe_reply_text(update.message, format_universal_response(answer))
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
