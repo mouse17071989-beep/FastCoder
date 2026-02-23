@@ -574,22 +574,19 @@ def build_stub_code(language_key: str | None) -> str:
 def build_universal_prompt(task: str) -> str:
     return (
         "Ответь подробно и по делу, без кода и без псевдокода.\n"
-        "Структура ответа (строго в таком виде, без markdown):\n"
-        "Краткий вывод: ...\n"
-        "Шаги:\n"
-        "1) ...\n"
-        "2) ...\n\n"
+        "Оформи ответ в Markdown в таком стиле:\n"
+        "# Заголовок\n"
+        "## Краткий вывод\n"
+        "<1-3 предложения>\n"
+        "---\n"
+        "## Пошаговые рекомендации\n"
+        "1. Шаг: <кратко>\n"
+        "- Подпункт\n"
+        "2. Шаг: <кратко>\n"
+        "- Подпункт\n\n"
+        "Запрещено: код, блоки кода, псевдокод.\n\n"
         f"Запрос: {task}"
     )
-
-
-def format_universal_response(text: str) -> str:
-    clean = (text or "").strip()
-    if not clean:
-        clean = "Краткий вывод: ответ пуст.\nШаги:\n1) Повтори запрос."
-    header = "🧠 Универсал"
-    separator = "-" * 28
-    return f"{header}\n{separator}\n{clean}"
 
 
 async def generate_code_for_task(update: Update, context: ContextTypes.DEFAULT_TYPE, task_text: str) -> None:
@@ -674,12 +671,15 @@ async def generate_universal_answer(update: Update, context: ContextTypes.DEFAUL
     await update.message.chat.send_action(ChatAction.TYPING)
     if STUB_MODE:
         answer = (
-            "Краткий вывод: это демо-ответ без кода.\n\n"
-            "Шаги:\n"
-            "1) Собери требования.\n"
-            "2) Определи критерии успеха.\n"
-            "3) Сделай план из 3-5 пунктов.\n"
-            "4) Проверь результат на одном примере."
+            "# Демо-ответ для проверки стиля\n\n"
+            "## Краткий вывод\n"
+            "Это пример форматирования без кода.\n\n"
+            "---\n\n"
+            "## Пошаговые рекомендации\n"
+            "1. Шаг: Собери требования\n"
+            "- Опиши цель в 1-2 предложениях.\n"
+            "2. Шаг: Составь план\n"
+            "- Выдели 3-5 ключевых действий."
         )
     else:
         prompt = build_universal_prompt(task_text)
@@ -691,7 +691,7 @@ async def generate_universal_answer(update: Update, context: ContextTypes.DEFAUL
             max_tokens=1600,
         )
 
-    await safe_reply_text(update.message, format_universal_response(answer))
+    await safe_reply_text(update.message, answer, parse_mode="Markdown")
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
