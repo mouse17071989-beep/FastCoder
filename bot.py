@@ -43,6 +43,10 @@ SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
     "Ты - профессиональный кодер. Пишешь код и кратко поясняешь структуру и как запустить/установить.",
 )
+UNIVERSAL_SYSTEM_PROMPT = os.getenv(
+    "UNIVERSAL_SYSTEM_PROMPT",
+    "Ты универсальный ассистент. Отвечай подробно и полезно. Никогда не пиши код.",
+)
 
 CODE_MODELS = [
     "claude-sonnet-4-5",
@@ -83,7 +87,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton("💻 Код"), KeyboardButton("❓ Помощь")],
-            [KeyboardButton("💡 Идеи"), KeyboardButton("🧪 Тест моделей")],
+            [KeyboardButton("💡 Идеи"), KeyboardButton("🧠 Универсал")],
             [KeyboardButton("❌ Отмена")],
         ],
         resize_keyboard=True,
@@ -248,6 +252,21 @@ def build_code_settings_keyboard(user_data: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def build_universal_settings_text() -> str:
+    return (
+        "Режим /universal\n\n"
+        "1) Опиши задачу текстом\n"
+        "2) Или нажми «Помоги с промтом» и я соберу четкий запрос\n\n"
+        "Важно: в этом режиме я не пишу код, только текстовые ответы."
+    )
+
+
+def build_universal_settings_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Помоги с промтом", callback_data="universal:help_prompt")]]
+    )
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user:
@@ -255,6 +274,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     context.user_data["code_mode"] = False
     context.user_data["awaiting_prompt_help"] = False
+    context.user_data["universal_mode"] = False
+    context.user_data["awaiting_universal_prompt_help"] = False
     context.user_data["selected_model"] = ANTHROPIC_MODEL
     context.user_data["selected_language"] = None
 
@@ -263,8 +284,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"🤖 Я AI-бот для генерации кода. Базовая модель: {ANTHROPIC_MODEL}.\n\n"
         "🧩 Что умею:\n"
         "• /code — режим с кнопками: выбор модели и языка\n"
+        "• /universal — универсальный режим без кода\n"
         "• /ideas — идеи задач от ИИ\n"
-        "• /test_models — тест доступности моделей\n"
         "• /help — подсказки\n"
         "• /cancel — сброс режима /code"
     )
@@ -276,8 +297,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Команды:\n"
         "• /start — приветствие и сброс\n"
         "• /code — мини-настройки модели и языка\n"
+        "• /universal — универсальный режим без кода\n"
         "• /ideas — 5 идей\n"
-        "• /test_models — проверка всех моделей\n"
         "• /cancel — выйти из режима /code\n\n"
         "Доступ к ИИ только после подписки на канал."
     )
@@ -290,6 +311,8 @@ async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     context.user_data["code_mode"] = True
     context.user_data["awaiting_prompt_help"] = False
+    context.user_data["universal_mode"] = False
+    context.user_data["awaiting_universal_prompt_help"] = False
     context.user_data.setdefault("selected_model", ANTHROPIC_MODEL)
 
     await update.message.reply_text(
@@ -298,43 +321,29 @@ async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
-async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data["code_mode"] = False
-    context.user_data["awaiting_prompt_help"] = False
-    context.user_data["selected_language"] = None
-    context.user_data["selected_model"] = ANTHROPIC_MODEL
-    await update.message.reply_text("Режим /code выключен.", reply_markup=main_keyboard())
-
-
-async def test_models_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def universal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await ensure_access(update, context):
         return
 
-    await update.message.reply_text("Запускаю тест всех моделей. Это может занять до минуты.")
-    lines = []
-    for model in CODE_MODELS:
-        logger.info("🧪Тест модели: %s", model)
-        try:
-            await ask_anthropic_ai(
-                "Ответь строго: OK",
-                model=model,
-                system_prompt="Проверка доступности модели. Ответь только OK.",
-                temperature=0.0,
-                use_fallback=False,
-                max_tokens=32,
-            )
-            lines.append(f"✅ {model}")
-        except httpx.HTTPStatusError as exc:
-            lines.append(f"❌ {model} — HTTP {exc.response.status_code}")
-        except (httpx.ConnectError, httpx.TimeoutException):
-            lines.append(f"⚠️ {model} — сеть/таймаут")
-        except Exception:
-            lines.append(f"❌ {model} — ошибка")
+    context.user_data["code_mode"] = False
+    context.user_data["awaiting_prompt_help"] = False
+    context.user_data["universal_mode"] = True
+    context.user_data["awaiting_universal_prompt_help"] = False
 
     await update.message.reply_text(
-        "Результат теста моделей:\n\n" + "\n".join(lines),
-        reply_markup=main_keyboard(),
+        build_universal_settings_text(),
+        reply_markup=build_universal_settings_keyboard(),
     )
+
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["code_mode"] = False
+    context.user_data["awaiting_prompt_help"] = False
+    context.user_data["universal_mode"] = False
+    context.user_data["awaiting_universal_prompt_help"] = False
+    context.user_data["selected_language"] = None
+    context.user_data["selected_model"] = ANTHROPIC_MODEL
+    await update.message.reply_text("Режим /code выключен.", reply_markup=main_keyboard())
 
 
 async def ideas_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -470,9 +479,21 @@ async def code_settings_callback(update: Update, context: ContextTypes.DEFAULT_T
             return
         context.user_data["code_mode"] = True
         context.user_data["awaiting_prompt_help"] = True
+        context.user_data["universal_mode"] = False
+        context.user_data["awaiting_universal_prompt_help"] = False
         await query.message.reply_text(
             "Опиши, что тебе нужно в свободной форме.\n"
             "Я соберу идеальный промт и сразу запущу генерацию кода."
+        )
+        return
+    elif data == "universal:help_prompt":
+        context.user_data["code_mode"] = False
+        context.user_data["awaiting_prompt_help"] = False
+        context.user_data["universal_mode"] = True
+        context.user_data["awaiting_universal_prompt_help"] = True
+        await query.message.reply_text(
+            "Опиши, что тебе нужно в свободной форме.\n"
+            "Я соберу четкий промт и сразу отвечу."
         )
         return
 
@@ -540,6 +561,14 @@ def build_stub_code(language_key: str | None) -> str:
     )
 
 
+def build_universal_prompt(task: str) -> str:
+    return (
+        "Ответь подробно и по делу, без кода и без псевдокода.\n"
+        "Структурируй ответ: краткий вывод, далее пошаговые рекомендации.\n\n"
+        f"Запрос: {task}"
+    )
+
+
 async def generate_code_for_task(update: Update, context: ContextTypes.DEFAULT_TYPE, task_text: str) -> None:
     lang_key = context.user_data.get("selected_language")
     model = context.user_data.get("selected_model", ANTHROPIC_MODEL)
@@ -586,6 +615,53 @@ async def generate_code_for_task(update: Update, context: ContextTypes.DEFAULT_T
         await safe_reply_code(update.message, answer, lang=lang_key)
 
 
+async def generate_universal_answer(update: Update, context: ContextTypes.DEFAULT_TYPE, task_text: str) -> None:
+    user = update.effective_user
+    if not user:
+        await update.message.reply_text("Не удалось определить пользователя.")
+        return
+
+    try:
+        access = await api_consume_access(user.id)
+    except Exception:
+        logger.exception("Failed to consume access via API")
+        await update.message.reply_text("Сервис доступа временно недоступен. Попробуй позже.")
+        return
+
+    if not access.get("allowed"):
+        used = access.get("free_used", 0)
+        limit = access.get("free_limit", FREE_REQUESTS_LIMIT)
+        await update.message.reply_text(
+            f"Лимит бесплатных запросов исчерпан ({used}/{limit}).\n"
+            f"Подписка: {PRICE_RUB} руб/мес.\n"
+            "Оплати, чтобы продолжить.",
+            reply_markup=build_paywall_keyboard(user.id),
+        )
+        return
+
+    await update.message.chat.send_action(ChatAction.TYPING)
+    if STUB_MODE:
+        answer = (
+            "Краткий вывод: это демо-ответ без кода.\n\n"
+            "Шаги:\n"
+            "1) Собери требования.\n"
+            "2) Определи критерии успеха.\n"
+            "3) Сделай план из 3-5 пунктов.\n"
+            "4) Проверь результат на одном примере."
+        )
+    else:
+        prompt = build_universal_prompt(task_text)
+        answer = await ask_anthropic_ai(
+            prompt,
+            model=ANTHROPIC_MODEL,
+            system_prompt=UNIVERSAL_SYSTEM_PROMPT,
+            temperature=0.6,
+            max_tokens=1600,
+        )
+
+    await safe_reply_text(update.message, answer)
+
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.text:
         return
@@ -608,8 +684,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if lowered in {"ideas", "идеи", "💡 идеи"}:
         await ideas_command(update, context)
         return
-    if lowered in {"test_models", "тест моделей", "🧪 тест моделей"}:
-        await test_models_command(update, context)
+    if lowered in {"universal", "универсал", "🧠 универсал"}:
+        await universal_command(update, context)
         return
     if lowered in {"cancel", "отмена", "❌ отмена"}:
         await cancel_command(update, context)
@@ -650,13 +726,44 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await generate_code_for_task(update, context, polished_prompt)
             return
 
+        if context.user_data.get("awaiting_universal_prompt_help"):
+            context.user_data["awaiting_universal_prompt_help"] = False
+            if STUB_MODE:
+                polished_prompt = user_text
+            else:
+                helper_prompt = (
+                    "Составь качественный промт для универсального AI-ассистента. "
+                    "Он должен быть конкретным, структурированным, с требованиями к результату.\n"
+                    f"Черновое описание пользователя: {user_text}"
+                )
+                await update.message.chat.send_action(ChatAction.TYPING)
+                polished_prompt = await ask_anthropic_ai(
+                    helper_prompt,
+                    model=PROMPT_HELP_MODEL,
+                    system_prompt="Ты эксперт по prompt engineering.",
+                    temperature=0.3,
+                    max_tokens=700,
+                )
+            await safe_reply_text(
+                update.message,
+                "**Промт собран. Запускаю ответ.**",
+                parse_mode="Markdown",
+            )
+            await safe_reply_text(update.message, polished_prompt)
+            await generate_universal_answer(update, context, polished_prompt)
+            return
+
         if context.user_data.get("code_mode"):
             await generate_code_for_task(update, context, user_text)
             return
 
+        if context.user_data.get("universal_mode"):
+            await generate_universal_answer(update, context, user_text)
+            return
+
         await update.message.reply_text(
-            "Я отвечаю только в режиме /code.\n"
-            "Нажми «💻 Код», выбери модель и язык, затем отправь задачу.\n"
+            "Выбери режим: /code или /universal.\n"
+            "Нажми «💻 Код» для генерации кода или «🧠 Универсал» для текстовых ответов.\n"
             "Или нажми «❓ Помощь».",
             reply_markup=main_keyboard(),
         )
@@ -702,10 +809,10 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("code", code_command))
+    app.add_handler(CommandHandler("universal", universal_command))
     app.add_handler(CommandHandler("ideas", ideas_command))
-    app.add_handler(CommandHandler("test_models", test_models_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
-    app.add_handler(CallbackQueryHandler(code_settings_callback, pattern=r"^(model:|lang:|code:).+"))
+    app.add_handler(CallbackQueryHandler(code_settings_callback, pattern=r"^(model:|lang:|code:|universal:).+"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     app.run_polling(drop_pending_updates=True)
 
