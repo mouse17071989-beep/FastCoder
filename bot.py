@@ -3,11 +3,13 @@ import logging
 import os
 
 import httpx
+from urllib.parse import urlencode
 from dotenv import load_dotenv
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
+    LabeledPrice,
     ReplyKeyboardMarkup,
     Update,
     WebAppInfo,
@@ -20,11 +22,13 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    PreCheckoutQueryHandler,
     filters,
 )
 
 from db import (
     get_free_used,
+    grant_paid,
     increment_free_used,
     init_db,
     is_paid_active,
@@ -41,6 +45,15 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
 FREE_REQUESTS_LIMIT = int(os.getenv("FREE_REQUESTS_LIMIT", "3"))
+PRICE_RUB = int(os.getenv("PRICE_RUB", "300"))
+STARS_PRICE = int(os.getenv("STARS_PRICE", "300"))
+PAID_DAYS = int(os.getenv("PAID_DAYS", "30"))
+
+YOOMONEY_RECEIVER = os.getenv("YOOMONEY_RECEIVER", "")
+YOOMONEY_TARGETS = os.getenv("YOOMONEY_TARGETS", "Подписка на 30 дней")
+YOOMONEY_PAYMENT_TYPE = os.getenv("YOOMONEY_PAYMENT_TYPE", "AC")
+YOOMONEY_QUICKPAY_FORM = os.getenv("YOOMONEY_QUICKPAY_FORM", "shop")
+YOOMONEY_SUCCESS_URL = os.getenv("YOOMONEY_SUCCESS_URL", "")
 
 MINI_APP_URL = os.getenv("MINI_APP_URL", "")
 STUB_MODE = os.getenv("STUB_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -97,6 +110,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton("💻 Код"), KeyboardButton("❓ Помощь")],
             [KeyboardButton("💡 Идеи"), KeyboardButton("🧠 Универсал")],
+            [KeyboardButton("💳 Подписка")],
             [KeyboardButton("❌ Отмена")],
         ],
         resize_keyboard=True,
@@ -182,6 +196,31 @@ def build_mini_app_keyboard(response_id: str) -> InlineKeyboardMarkup | None:
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton("Открыть мини-приложение", web_app=WebAppInfo(url=url))]]
     )
+
+
+def build_yoomoney_url(user_id: int) -> str | None:
+    if not YOOMONEY_RECEIVER:
+        return None
+    params = {
+        "receiver": YOOMONEY_RECEIVER,
+        "quickpay-form": YOOMONEY_QUICKPAY_FORM,
+        "targets": YOOMONEY_TARGETS,
+        "sum": str(PRICE_RUB),
+        "label": f"sub_{user_id}",
+        "paymentType": YOOMONEY_PAYMENT_TYPE,
+    }
+    if YOOMONEY_SUCCESS_URL:
+        params["successURL"] = YOOMONEY_SUCCESS_URL
+    return "https://yoomoney.ru/quickpay/confirm.xml?" + urlencode(params)
+
+
+def build_paywall_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    rows.append([InlineKeyboardButton("Оплатить Telegram Stars", callback_data="pay:stars")])
+    yoomoney_url = build_yoomoney_url(user_id)
+    if yoomoney_url:
+        rows.append([InlineKeyboardButton("Оплатить YooMoney", url=yoomoney_url)])
+    return InlineKeyboardMarkup(rows)
 
 
 async def ensure_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -291,11 +330,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
         "👋 Привет!\n\n"
         f"🤖 Я AI-бот для генерации кода. Базовая модель: {ANTHROPIC_MODEL}.\n\n"
-        f"🆓 Бесплатно: {FREE_REQUESTS_LIMIT} запрос(а), затем подписка.\n\n"
+        f"🆓 Бесплатно: {FREE_REQUESTS_LIMIT} запрос(а), затем подписка {PRICE_RUB} руб/мес.\n\n"
         "🧩 Что умею:\n"
         "• /code — режим с кнопками: выбор модели и языка\n"
         "• /universal — универсальный режим без кода\n"
         "• /ideas — идеи задач от ИИ\n"
+        "• /subscribe — подписка\n"
         "• /help — подсказки\n"
         "• /cancel — сброс режима /code"
     )
@@ -309,10 +349,70 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• /code — мини-настройки модели и языка\n"
         "• /universal — универсальный режим без кода\n"
         "• /ideas — 5 идей\n"
+        "• /subscribe — подписка\n"
         "• /cancel — выйти из режима /code\n\n"
         "Доступ к ИИ только после подписки на канал."
     )
     await update.message.reply_text(text, reply_markup=main_keyboard())
+
+
+async def subscribe_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not user:
+        return
+    await update.message.reply_text(
+        f"Подписка: {PRICE_RUB} руб/мес или Telegram Stars.\nВыбери способ оплаты:",
+        reply_markup=build_paywall_keyboard(user.id),
+    )
+
+
+async def send_stars_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not user:
+        return
+    try:
+        await context.bot.send_invoice(
+            chat_id=user.id,
+            title="Подписка на 30 дней",
+            description=f"Доступ к боту на {PAID_DAYS} дней.",
+            payload=f"stars:{user.id}",
+            currency="XTR",
+            prices=[LabeledPrice("Подписка", STARS_PRICE)],
+            provider_token="",
+        )
+    except Exception:
+        logger.exception("Failed to send Stars invoice")
+        await update.effective_message.reply_text("Не удалось создать счет. Попробуй позже.")
+
+
+async def pay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    if query.data == "pay:stars":
+        await send_stars_invoice(update, context)
+
+
+async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.pre_checkout_query
+    if not query:
+        return
+    await query.answer(ok=True)
+
+
+async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.message.successful_payment:
+        return
+    user = update.effective_user
+    if not user:
+        return
+    try:
+        grant_paid(user.id, PAID_DAYS)
+        await update.message.reply_text("Оплата получена. Подписка активирована ✅")
+    except Exception:
+        logger.exception("Failed to activate paid access")
+        await update.message.reply_text("Оплата прошла, но активация не удалась. Напиши в поддержку.")
 
 
 async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -574,19 +674,24 @@ def build_stub_code(language_key: str | None) -> str:
 def build_universal_prompt(task: str) -> str:
     return (
         "Ответь подробно и по делу, без кода и без псевдокода.\n"
-        "Оформи ответ в Markdown в таком стиле:\n"
-        "# Заголовок\n"
-        "## Краткий вывод\n"
-        "<1-3 предложения>\n"
-        "---\n"
-        "## Пошаговые рекомендации\n"
-        "1. Шаг: <кратко>\n"
-        "- Подпункт\n"
-        "2. Шаг: <кратко>\n"
-        "- Подпункт\n\n"
-        "Запрещено: код, блоки кода, псевдокод.\n\n"
+        "Оформи ответ как простой текст БЕЗ markdown.\n"
+        "Формат:\n"
+        "✨ Тема: <короткий заголовок>\n"
+        "💡 Краткий вывод: <1-3 предложения>\n"
+        "🧭 Шаги:\n"
+        "1) ...\n"
+        "2) ...\n"
+        "3) ...\n\n"
+        "Запрещено: любые #, **, ``` и другой markdown.\n\n"
         f"Запрос: {task}"
     )
+
+
+def format_universal_response(text: str) -> str:
+    clean = (text or "").strip()
+    if not clean:
+        clean = "✨ Тема: Ответ пуст\n💡 Краткий вывод: Повтори запрос.\n🧭 Шаги:\n1) Повтори запрос."
+    return clean
 
 
 async def generate_code_for_task(update: Update, context: ContextTypes.DEFAULT_TYPE, task_text: str) -> None:
@@ -605,15 +710,17 @@ async def generate_code_for_task(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("Не удалось определить пользователя.")
         return
 
-    used = get_free_used(user.id)
-    if used >= FREE_REQUESTS_LIMIT:
-        await update.message.reply_text(
-            f"Лимит бесплатных запросов исчерпан ({used}/{FREE_REQUESTS_LIMIT}).\n"
-            "Оформи подписку, чтобы продолжить."
-        )
-        return
-
-    increment_free_used(user.id)
+    if not is_paid_active(user.id):
+        used = get_free_used(user.id)
+        if used >= FREE_REQUESTS_LIMIT:
+            await update.message.reply_text(
+                f"Лимит бесплатных запросов исчерпан ({used}/{FREE_REQUESTS_LIMIT}).\n"
+                f"Подписка: {PRICE_RUB} руб/мес.\n"
+                "Выбери способ оплаты:",
+                reply_markup=build_paywall_keyboard(user.id),
+            )
+            return
+        increment_free_used(user.id)
 
     language_title = _get_lang_title(lang_key)
     prompt = build_code_generation_prompt(task_text, language_title)
@@ -658,28 +765,27 @@ async def generate_universal_answer(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("Не удалось определить пользователя.")
         return
 
-    used = get_free_used(user.id)
-    if used >= FREE_REQUESTS_LIMIT:
-        await update.message.reply_text(
-            f"Лимит бесплатных запросов исчерпан ({used}/{FREE_REQUESTS_LIMIT}).\n"
-            "Оформи подписку, чтобы продолжить."
-        )
-        return
-
-    increment_free_used(user.id)
+    if not is_paid_active(user.id):
+        used = get_free_used(user.id)
+        if used >= FREE_REQUESTS_LIMIT:
+            await update.message.reply_text(
+                f"Лимит бесплатных запросов исчерпан ({used}/{FREE_REQUESTS_LIMIT}).\n"
+                f"Подписка: {PRICE_RUB} руб/мес.\n"
+                "Выбери способ оплаты:",
+                reply_markup=build_paywall_keyboard(user.id),
+            )
+            return
+        increment_free_used(user.id)
 
     await update.message.chat.send_action(ChatAction.TYPING)
     if STUB_MODE:
         answer = (
-            "# Демо-ответ для проверки стиля\n\n"
-            "## Краткий вывод\n"
-            "Это пример форматирования без кода.\n\n"
-            "---\n\n"
-            "## Пошаговые рекомендации\n"
-            "1. Шаг: Собери требования\n"
-            "- Опиши цель в 1-2 предложениях.\n"
-            "2. Шаг: Составь план\n"
-            "- Выдели 3-5 ключевых действий."
+            "✨ Тема: Демо-ответ для проверки стиля\n"
+            "💡 Краткий вывод: Это пример форматирования без кода.\n"
+            "🧭 Шаги:\n"
+            "1) Собери требования.\n"
+            "2) Составь план из 3-5 пунктов.\n"
+            "3) Проверь результат на одном примере."
         )
     else:
         prompt = build_universal_prompt(task_text)
@@ -691,7 +797,7 @@ async def generate_universal_answer(update: Update, context: ContextTypes.DEFAUL
             max_tokens=1600,
         )
 
-    await safe_reply_text(update.message, answer, parse_mode="Markdown")
+    await safe_reply_text(update.message, format_universal_response(answer))
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -718,6 +824,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     if lowered in {"universal", "универсал", "🧠 универсал"}:
         await universal_command(update, context)
+        return
+    if lowered in {"subscribe", "подписка", "💳 подписка"}:
+        await subscribe_command(update, context)
         return
     if lowered in {"cancel", "отмена", "❌ отмена"}:
         await cancel_command(update, context)
@@ -843,8 +952,12 @@ def main() -> None:
     app.add_handler(CommandHandler("code", code_command))
     app.add_handler(CommandHandler("universal", universal_command))
     app.add_handler(CommandHandler("ideas", ideas_command))
+    app.add_handler(CommandHandler("subscribe", subscribe_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CallbackQueryHandler(code_settings_callback, pattern=r"^(model:|lang:|code:|universal:).+"))
+    app.add_handler(CallbackQueryHandler(pay_callback, pattern=r"^pay:.+"))
+    app.add_handler(PreCheckoutQueryHandler(precheckout_handler))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     app.run_polling(drop_pending_updates=True)
 
