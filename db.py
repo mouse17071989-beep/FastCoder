@@ -13,6 +13,14 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, col_type: str) -> None:
+    columns = {
+        row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+
+
 def init_db() -> None:
     with _connect() as conn:
         conn.execute(
@@ -26,10 +34,12 @@ def init_db() -> None:
                 last_seen TEXT,
                 is_channel_member INTEGER DEFAULT 0,
                 is_paid INTEGER DEFAULT 0,
-                paid_until TEXT
+                paid_until TEXT,
+                free_used INTEGER DEFAULT 0
             )
             """
         )
+        _ensure_column(conn, "users", "free_used", "INTEGER DEFAULT 0")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS responses (
@@ -114,6 +124,30 @@ def is_paid_active(user_id: int) -> bool:
         return datetime.fromisoformat(paid_until) > datetime.now(timezone.utc)
     except ValueError:
         return False
+
+
+def get_free_used(user_id: int) -> int:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT free_used FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return 0
+    return int(row["free_used"] or 0)
+
+
+def increment_free_used(user_id: int) -> int:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET free_used = COALESCE(free_used, 0) + 1, last_seen = ? WHERE user_id = ?",
+            (now_iso(), user_id),
+        )
+        row = conn.execute(
+            "SELECT free_used FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    return int(row["free_used"] or 0) if row else 0
 
 
 def get_user(user_id: int):

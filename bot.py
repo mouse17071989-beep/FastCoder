@@ -23,7 +23,15 @@ from telegram.ext import (
     filters,
 )
 
-from db import init_db, is_paid_active, save_response, set_channel_member, upsert_user
+from db import (
+    get_free_used,
+    increment_free_used,
+    init_db,
+    is_paid_active,
+    save_response,
+    set_channel_member,
+    upsert_user,
+)
 
 # Support .env files saved as UTF-8 with BOM (common on Windows editors).
 load_dotenv(encoding="utf-8-sig")
@@ -32,6 +40,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
+FREE_REQUESTS_LIMIT = int(os.getenv("FREE_REQUESTS_LIMIT", "3"))
 
 MINI_APP_URL = os.getenv("MINI_APP_URL", "")
 STUB_MODE = os.getenv("STUB_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -282,6 +291,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
         "👋 Привет!\n\n"
         f"🤖 Я AI-бот для генерации кода. Базовая модель: {ANTHROPIC_MODEL}.\n\n"
+        f"🆓 Бесплатно: {FREE_REQUESTS_LIMIT} запрос(а), затем подписка.\n\n"
         "🧩 Что умею:\n"
         "• /code — режим с кнопками: выбор модели и языка\n"
         "• /universal — универсальный режим без кода\n"
@@ -580,6 +590,21 @@ async def generate_code_for_task(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
 
+    user = update.effective_user
+    if not user:
+        await update.message.reply_text("Не удалось определить пользователя.")
+        return
+
+    used = get_free_used(user.id)
+    if used >= FREE_REQUESTS_LIMIT:
+        await update.message.reply_text(
+            f"Лимит бесплатных запросов исчерпан ({used}/{FREE_REQUESTS_LIMIT}).\n"
+            "Оформи подписку, чтобы продолжить."
+        )
+        return
+
+    increment_free_used(user.id)
+
     language_title = _get_lang_title(lang_key)
     prompt = build_code_generation_prompt(task_text, language_title)
 
@@ -621,23 +646,15 @@ async def generate_universal_answer(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("Не удалось определить пользователя.")
         return
 
-    try:
-        access = await api_consume_access(user.id)
-    except Exception:
-        logger.exception("Failed to consume access via API")
-        await update.message.reply_text("Сервис доступа временно недоступен. Попробуй позже.")
-        return
-
-    if not access.get("allowed"):
-        used = access.get("free_used", 0)
-        limit = access.get("free_limit", FREE_REQUESTS_LIMIT)
+    used = get_free_used(user.id)
+    if used >= FREE_REQUESTS_LIMIT:
         await update.message.reply_text(
-            f"Лимит бесплатных запросов исчерпан ({used}/{limit}).\n"
-            f"Подписка: {PRICE_RUB} руб/мес.\n"
-            "Оплати, чтобы продолжить.",
-            reply_markup=build_paywall_keyboard(user.id),
+            f"Лимит бесплатных запросов исчерпан ({used}/{FREE_REQUESTS_LIMIT}).\n"
+            "Оформи подписку, чтобы продолжить."
         )
         return
+
+    increment_free_used(user.id)
 
     await update.message.chat.send_action(ChatAction.TYPING)
     if STUB_MODE:
