@@ -32,7 +32,6 @@ from db import (
     increment_free_used,
     init_db,
     is_paid_active,
-    save_response,
     set_channel_member,
     upsert_user,
 )
@@ -56,6 +55,8 @@ YOOMONEY_QUICKPAY_FORM = os.getenv("YOOMONEY_QUICKPAY_FORM", "shop")
 YOOMONEY_SUCCESS_URL = os.getenv("YOOMONEY_SUCCESS_URL", "")
 
 MINI_APP_URL = os.getenv("MINI_APP_URL", "")
+MINI_APP_API_URL = os.getenv("MINI_APP_API_URL", "")
+MINI_APP_API_KEY = os.getenv("MINI_APP_API_KEY", "")
 STUB_MODE = os.getenv("STUB_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "")  # example: @my_channel
@@ -196,6 +197,31 @@ def build_mini_app_keyboard(response_id: str) -> InlineKeyboardMarkup | None:
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton("Открыть мини-приложение", web_app=WebAppInfo(url=url))]]
     )
+
+
+def _api_base() -> str:
+    return MINI_APP_API_URL.strip().rstrip("/")
+
+
+async def api_post(path: str, payload: dict) -> dict:
+    base = _api_base()
+    if not base:
+        raise RuntimeError("MINI_APP_API_URL is not set")
+    headers = {}
+    if MINI_APP_API_KEY:
+        headers["X-API-Key"] = MINI_APP_API_KEY
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(f"{base}{path}", json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def api_store_response(user_id: int | None, content: str) -> str:
+    data = await api_post(
+        "/api/response",
+        {"user_id": user_id, "content": content},
+    )
+    return data.get("id", "")
 
 
 def build_yoomoney_url(user_id: int) -> str | None:
@@ -746,7 +772,11 @@ async def generate_code_for_task(update: Update, context: ContextTypes.DEFAULT_T
             temperature=0.5,
             max_tokens=4200,
         )
-    response_id = save_response(update.effective_user.id if update.effective_user else None, answer)
+    response_id = ""
+    try:
+        response_id = await api_store_response(update.effective_user.id if update.effective_user else None, answer)
+    except Exception:
+        logger.exception("Failed to store response via API")
     mini_app_keyboard = build_mini_app_keyboard(response_id)
     if mini_app_keyboard:
         await update.message.reply_text(
@@ -755,7 +785,7 @@ async def generate_code_for_task(update: Update, context: ContextTypes.DEFAULT_T
         )
     else:
         await update.message.reply_text(
-            "Мини-приложение не настроено. Укажи MINI_APP_URL, чтобы открыть код."
+            "Не удалось сохранить ответ для мини-приложения. Проверь MINI_APP_API_URL."
         )
 
 

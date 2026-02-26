@@ -17,7 +17,10 @@
     return;
   }
 
-  fetch(`/api/response?id=${encodeURIComponent(id)}`)
+  const apiBase = window.MINI_APP_API_URL || "";
+  const apiUrl = `${apiBase}/api/response?id=${encodeURIComponent(id)}`;
+
+  fetch(apiUrl)
     .then((res) => {
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
