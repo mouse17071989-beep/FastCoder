@@ -43,7 +43,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
-FREE_REQUESTS_LIMIT = int(os.getenv("FREE_REQUESTS_LIMIT", "3"))
+FREE_REQUESTS_LIMIT = int(os.getenv("FREE_REQUESTS_LIMIT", "4"))
 PRICE_RUB = int(os.getenv("PRICE_RUB", "300"))
 STARS_PRICE = int(os.getenv("STARS_PRICE", "300"))
 PAID_DAYS = int(os.getenv("PAID_DAYS", "30"))
@@ -210,10 +210,18 @@ async def api_post(path: str, payload: dict) -> dict:
     headers = {}
     if MINI_APP_API_KEY:
         headers["X-API-Key"] = MINI_APP_API_KEY
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.post(f"{base}{path}", json=payload, headers=headers)
-        resp.raise_for_status()
-        return resp.json()
+    timeout = httpx.Timeout(60.0, connect=15.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(3):
+            try:
+                resp = await client.post(f"{base}{path}", json=payload, headers=headers)
+                resp.raise_for_status()
+                return resp.json()
+            except (httpx.ReadTimeout, httpx.TimeoutException):
+                if attempt < 2:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
+                raise
 
 
 async def api_store_response(user_id: int | None, content: str) -> str:
