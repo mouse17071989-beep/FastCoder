@@ -655,6 +655,7 @@ def build_code_generation_prompt(task: str, language_title: str) -> str:
         "1) КРАТКОЕ пояснение структуры (2-4 пункта).\n"
         "2) Как и куда ставить/запускать (шаги установки/запуска, пути/файлы).\n"
         "3) Полный код (без markdown-оформления).\n"
+        "Перед кодом выведи строку-маркер: ===CODE===\n"
         "Комментарии внутри кода не добавляй.\n"
         "Не обрывай код на середине: файл должен заканчиваться логически завершенно.\n\n"
         f"Задача: {task}"
@@ -664,8 +665,13 @@ def build_code_generation_prompt(task: str, language_title: str) -> str:
 def build_stub_code(language_key: str | None) -> str:
     title = _get_lang_title(language_key)
     return (
-        f"# Demo stub output for {title}\n"
-        "# This is a long placeholder to test Telegram splitting and mini app rendering.\n\n"
+        "Краткое пояснение структуры:\n"
+        "1) Один файл со всей логикой.\n"
+        "2) Простой ввод/вывод.\n\n"
+        "Как и куда ставить/запускать:\n"
+        "1) Сохрани в calculator.py.\n"
+        "2) Запусти: python calculator.py\n\n"
+        "===CODE===\n"
         "import asyncio\n"
         "import json\n"
         "from dataclasses import dataclass\n"

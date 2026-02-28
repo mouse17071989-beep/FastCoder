@@ -72,6 +72,27 @@ h1 {
   margin-bottom: 12px;
 }
 
+.explanation {
+  white-space: pre-wrap;
+  line-height: 1.6;
+  color: var(--ink);
+  margin-bottom: 16px;
+}
+
+.code-block {
+  display: grid;
+  gap: 10px;
+}
+
+.code-block.is-hidden {
+  display: none;
+}
+
+.code-title {
+  font-weight: 600;
+  color: var(--muted);
+}
+
 .content {
   margin: 0;
   padding: 16px;
@@ -83,6 +104,27 @@ h1 {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.code-line {
+  display: block;
+  padding-left: 44px;
+  position: relative;
+}
+
+.code-line::before {
+  counter-increment: line;
+  content: counter(line);
+  position: absolute;
+  left: 0;
+  width: 34px;
+  text-align: right;
+  color: #6b7280;
+  user-select: none;
+}
+
+pre.content {
+  counter-reset: line;
 }
 
 .footer {

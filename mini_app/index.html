@@ -10,11 +10,16 @@
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;600&display=swap"
       rel="stylesheet"
     />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css"
+    />
     <link rel="stylesheet" href="/style.css" />
     <script>
       window.MINI_APP_API_URL = "https://fastcoder.onrender.com";
     </script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script defer src="/app.js"></script>
   </head>
   <body>
@@ -27,7 +32,11 @@
 
       <section class="card">
         <div id="status" class="status">Загружаю...</div>
-        <pre id="content" class="content" aria-live="polite"></pre>
+        <div id="explanation" class="explanation" aria-live="polite"></div>
+        <div id="code-block" class="code-block is-hidden">
+          <div class="code-title">Код</div>
+          <pre class="content"><code id="code" class="hljs"></code></pre>
+        </div>
       </section>
 
       <footer class="footer">
